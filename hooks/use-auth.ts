@@ -12,6 +12,7 @@ import {
   getAuthInfo,
   getDerivAccounts,
   getActiveLoginId,
+  storeDerivAccounts,
   setActiveLoginId,
   setAccountType,
   clearAllAuthData,
@@ -106,6 +107,7 @@ export interface UseAuthReturn {
   signUp: () => Promise<void>;
   logout: () => void;
   switchAccount: (accountId: string) => Promise<void>;
+  updateAccountBalance: (accountId: string, balance: string, currency?: string) => void;
   error: string | null;
 }
 
@@ -137,19 +139,50 @@ export function useAuth(): UseAuthReturn {
 
   // Complete auth: fetch accounts → get OTP → set WS URL
   const completeAuth = useCallback(
-    async (authInfo: AuthInfo) => {
+    async (authInfo: AuthInfo, preferredAccountId?: string | null) => {
       const fetchedAccounts = await fetchAccounts(authInfo, getAuthConfig().clientId);
       setAccounts(fetchedAccounts);
 
       if (fetchedAccounts.length > 0) {
-        const firstAccount = fetchedAccounts[0];
-        setActiveAccountId(firstAccount.account_id);
+        const selectedAccount =
+          fetchedAccounts.find(account => account.account_id === preferredAccountId) ??
+          fetchedAccounts[0];
+        setActiveLoginId(selectedAccount.account_id);
+        setAccountType(selectedAccount.account_type);
+        setActiveAccountId(selectedAccount.account_id);
 
-        const otpUrl = await fetchOTPUrl(firstAccount.account_id, authInfo);
+        const otpUrl = await fetchOTPUrl(selectedAccount.account_id, authInfo);
         setWsUrl(otpUrl);
       }
 
       setAuthState('authenticated');
+    },
+    [fetchOTPUrl]
+  );
+
+  // Fall back to the cached account snapshot when the fresh fetch fails (e.g.
+  // transient network error) instead of forcing a logout. The balance stream
+  // reconciles any staleness as soon as the socket connects.
+  const restoreCachedSession = useCallback(
+    async (authInfo: AuthInfo): Promise<boolean> => {
+      const cachedAccounts = getDerivAccounts();
+      const loginId = getActiveLoginId() ?? cachedAccounts?.[0]?.account_id;
+      if (!cachedAccounts || cachedAccounts.length === 0 || !loginId) return false;
+
+      // Mirror completeAuth: keep the persisted selection in sync as well.
+      const selectedAccount = cachedAccounts.find(a => a.account_id === loginId);
+      setActiveLoginId(loginId);
+      if (selectedAccount) setAccountType(selectedAccount.account_type);
+      setAccounts(cachedAccounts);
+      setActiveAccountId(loginId);
+      try {
+        const otpUrl = await fetchOTPUrl(loginId, authInfo);
+        setWsUrl(otpUrl);
+        setAuthState('authenticated');
+        return true;
+      } catch {
+        return false;
+      }
     },
     [fetchOTPUrl]
   );
@@ -182,42 +215,41 @@ export function useAuth(): UseAuthReturn {
       if (storedAuth) {
         // Check if token is expired
         if (storedAuth.expires_at && Date.now() / 1000 > storedAuth.expires_at) {
-          // Try to refresh
+          let refreshed: AuthInfo;
           try {
-            const refreshed = await refreshAccessToken(
+            refreshed = await refreshAccessToken(
               storedAuth.refresh_token,
               getAuthConfig().clientId
             );
-            await completeAuth(refreshed);
           } catch {
-            // Refresh failed — fall back to unauthenticated (public WS)
+            // Refresh failed (token revoked/expired) — fall back to
+            // unauthenticated (public WS)
             clearAllAuthData();
             setAuthState('unauthenticated');
+            return;
+          }
+          try {
+            await completeAuth(refreshed, getActiveLoginId());
+          } catch {
+            // Same resilience as the valid-session path: a transient fetch
+            // failure after a successful refresh keeps the session alive on
+            // the cached snapshot instead of forcing a logout.
+            if (!(await restoreCachedSession(refreshed))) {
+              clearAllAuthData();
+              setAuthState('unauthenticated');
+            }
           }
           return;
         }
 
-        // Valid stored session — restore accounts and get fresh OTP
-        const storedAccounts = getDerivAccounts();
-        if (storedAccounts && storedAccounts.length > 0) {
-          setAccounts(storedAccounts);
-          const loginId = getActiveLoginId() ?? storedAccounts[0].account_id;
-          setActiveAccountId(loginId);
-
-          try {
-            const otpUrl = await fetchOTPUrl(loginId, storedAuth);
-            setWsUrl(otpUrl);
-            setAuthState('authenticated');
-          } catch {
-            // OTP fetch failed — token may be invalid, clear and fallback
-            clearAllAuthData();
-            setAuthState('unauthenticated');
-          }
-        } else {
-          // Have auth info but no accounts — re-fetch
-          try {
-            await completeAuth(storedAuth);
-          } catch {
+        // Always refresh the account snapshot. The cached account list is only
+        // an initial render fallback and may contain a stale balance.
+        try {
+          await completeAuth(storedAuth, getActiveLoginId());
+        } catch {
+          // Fresh fetch failed (e.g. transient network error) — keep the
+          // session alive on the cached snapshot rather than logging out.
+          if (!(await restoreCachedSession(storedAuth))) {
             clearAllAuthData();
             setAuthState('unauthenticated');
           }
@@ -226,7 +258,7 @@ export function useAuth(): UseAuthReturn {
     };
 
     init();
-  }, [completeAuth, fetchOTPUrl]);
+  }, [completeAuth, fetchOTPUrl, restoreCachedSession]);
 
   // Keep ref in sync so visibility handler always has the current account ID
   useEffect(() => {
@@ -309,6 +341,32 @@ export function useAuth(): UseAuthReturn {
     [fetchOTPUrl, accounts]
   );
 
+  // Keep the account snapshot and its persisted fallback synchronized with
+  // authenticated balance stream updates.
+  const updateAccountBalance = useCallback(
+    (accountId: string, balance: string, currency?: string) => {
+      setAccounts(currentAccounts => {
+        let changed = false;
+        const updatedAccounts = currentAccounts.map(account => {
+          if (account.account_id !== accountId) return account;
+
+          const updatedCurrency = currency ?? account.currency;
+          if (account.balance === balance && account.currency === updatedCurrency) {
+            return account;
+          }
+
+          changed = true;
+          return { ...account, balance, currency: updatedCurrency };
+        });
+
+        if (!changed) return currentAccounts;
+        storeDerivAccounts(updatedAccounts);
+        return updatedAccounts;
+      });
+    },
+    []
+  );
+
   const activeAccount =
     accounts.find(acc => acc.account_id === activeAccountId) ?? accounts[0] ?? null;
 
@@ -322,6 +380,7 @@ export function useAuth(): UseAuthReturn {
     signUp,
     logout,
     switchAccount,
+    updateAccountBalance,
     error,
   };
 }

@@ -30,9 +30,9 @@ export function CurrentTickDisplay({
 
   return (
     <div className="text-center py-2 sm:py-4">
-      <div className="text-2xl sm:text-3xl font-mono font-bold tracking-wide">
+      <div className="text-xl sm:text-3xl font-mono font-bold tracking-wide">
         <span className="text-foreground">{priceWithoutLast}</span>
-        <span className="text-primary text-3xl sm:text-4xl">{lastDigitStr}</span>
+        <span className="text-primary text-2xl sm:text-4xl">{lastDigitStr}</span>
       </div>
       <div className="mt-1 sm:mt-2 inline-flex items-center gap-1.5 text-[11px] sm:text-xs text-muted-foreground">
         <span>Last Digit:</span>

@@ -136,8 +136,8 @@ export function Header({
           </Popover>
         )}
         {isAuthenticated ? (
-          <Button variant="destructive" onClick={onLogout}>
-            Logout
+          <Button variant="outline" onClick={onLogout}>
+            Log out
           </Button>
         ) : (
           <div className="flex items-center gap-2">

@@ -27,13 +27,13 @@ export function TradeTypeChips<T extends string>({
         const opt = options.find((o) => o.value === v);
         if (opt) onValueChange(opt.value);
       }}
-      className="w-fit gap-2"
+      className="w-max gap-1.5 sm:gap-2"
     >
       {options.map((opt) => (
         <ToggleGroupItem
           key={opt.value}
           value={opt.value}
-          className="rounded-full border border-input bg-background px-4 text-sm font-medium data-[state=on]:border-foreground data-[state=on]:bg-foreground data-[state=on]:text-background hover:bg-muted"
+          className="h-8 whitespace-nowrap rounded-full border border-input bg-background px-3 text-xs font-medium data-[state=on]:border-foreground data-[state=on]:bg-foreground data-[state=on]:text-background hover:bg-muted sm:h-10 sm:px-4 sm:text-sm"
         >
           {opt.label}
         </ToggleGroupItem>

@@ -3,6 +3,7 @@
 import { createContext, useContext } from 'react';
 import { useDerivWS } from '@deriv/core';
 import { useAuth } from '@/hooks/use-auth';
+import { useBalanceSync } from '@/hooks/use-balance-sync';
 import type { DerivWS } from '@deriv/core';
 import type { UseAuthReturn } from '@/hooks/use-auth';
 
@@ -26,6 +27,12 @@ export function DerivWSProvider({ children }: { children: React.ReactNode }) {
     url: auth.wsUrl,
     accountId: auth.activeAccountId ?? undefined,
   });
+  useBalanceSync(
+    ws,
+    isConnected,
+    auth.activeAccountId,
+    auth.updateAccountBalance
+  );
 
   return (
     <DerivWSContext.Provider value={{ ws, isConnected, isExhausted, auth }}>
